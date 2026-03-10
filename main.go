@@ -3,9 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/go-load-balancer/balancer"
@@ -22,9 +23,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	logger := logging.NewLogger()
+
 	cfg, err := config.Load(os.Args[1])
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		logger.Error("failed to load config", map[string]interface{}{"error": err.Error()})
+		os.Exit(1)
 	}
 
 	urls := make([]string, len(cfg.Backends))
@@ -34,33 +38,60 @@ func main() {
 
 	bal, err := balancer.NewBalancer(urls)
 	if err != nil {
-		log.Fatalf("failed to create balancer: %v", err)
+		logger.Error("failed to create balancer", map[string]interface{}{"error": err.Error()})
+		os.Exit(1)
 	}
 
-	logger := logging.NewLogger()
 	met := metrics.NewMetrics()
 
-	// Parse health check durations
 	interval, err := time.ParseDuration(cfg.HealthCheck.Interval)
 	if err != nil {
-		log.Fatalf("invalid health check interval: %v", err)
+		logger.Error("invalid health check interval", map[string]interface{}{"error": err.Error()})
+		os.Exit(1)
 	}
 	timeout, err := time.ParseDuration(cfg.HealthCheck.Timeout)
 	if err != nil {
-		log.Fatalf("invalid health check timeout: %v", err)
+		logger.Error("invalid health check timeout", map[string]interface{}{"error": err.Error()})
+		os.Exit(1)
 	}
 
-	// Start health checker
-	checker := health.NewChecker(bal, interval, cfg.HealthCheck.Path, timeout, logger)
-	checker.Start(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	http.Handle("/metrics", met.Handler())
-	http.Handle("/", proxy.NewHandler(bal, met, logger))
+	checker := health.NewChecker(bal, interval, cfg.HealthCheck.Path, timeout, logger)
+	checker.Start(ctx)
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", met.Handler())
+	mux.Handle("/", proxy.NewHandler(bal, met, logger))
+
+	srv := &http.Server{
+		Addr:         cfg.ListenAddr,
+		Handler:      mux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	// Graceful shutdown on SIGINT/SIGTERM.
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		sig := <-sigCh
+		logger.Info("shutting down", map[string]interface{}{"signal": sig.String()})
+		cancel()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		srv.Shutdown(shutdownCtx)
+	}()
 
 	logger.Info("load balancer starting", map[string]interface{}{
-		"addr": cfg.ListenAddr,
+		"addr":     cfg.ListenAddr,
+		"backends": len(cfg.Backends),
 	})
-	if err := http.ListenAndServe(cfg.ListenAddr, nil); err != nil {
-		log.Fatalf("server error: %v", err)
+
+	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+		logger.Error("server error", map[string]interface{}{"error": err.Error()})
+		os.Exit(1)
 	}
 }
