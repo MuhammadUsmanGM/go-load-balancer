@@ -1,0 +1,13 @@
+{
+  "listen_addr": ":8080",
+  "backends": [
+    { "url": "http://localhost:8081" },
+    { "url": "http://localhost:8082" },
+    { "url": "http://localhost:8083" }
+  ],
+  "health_check": {
+    "interval": "10s",
+    "path": "/health",
+    "timeout": "3s"
+  }
+}
