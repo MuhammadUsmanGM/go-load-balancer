@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-load-balancer/balancer"
 	"github.com/go-load-balancer/circuitbreaker"
+	"github.com/go-load-balancer/health"
 	"github.com/go-load-balancer/logging"
 	"github.com/go-load-balancer/metrics"
 )
@@ -46,10 +47,11 @@ type ProxyConfig struct {
 	MaxConnsPerHost     int
 	MaxRetries          int
 	RetryEnabled        bool
+	PassiveHealthCheck  bool // enable passive health checking
 }
 
 // NewHandler returns an HTTP handler that proxies requests through the balancer.
-func NewHandler(b *balancer.Balancer, m *metrics.Metrics, l *logging.Logger, cfg ProxyConfig, circuitBreakers map[string]*circuitbreaker.CircuitBreaker) http.HandlerFunc {
+func NewHandler(b *balancer.Balancer, m *metrics.Metrics, l *logging.Logger, cfg ProxyConfig, circuitBreakers map[string]*circuitbreaker.CircuitBreaker, healthChecker *health.Checker) http.HandlerFunc {
 	// Build transport with configurable connection pooling
 	transport := &http.Transport{
 		MaxIdleConns:        cfg.MaxIdleConns,
@@ -145,8 +147,33 @@ func NewHandler(b *balancer.Balancer, m *metrics.Metrics, l *logging.Logger, cfg
 			if cb, exists := circuitBreakers[backendURL]; exists {
 				if sw.code >= 500 {
 					cb.RecordFailure()
+					backend.RecordFailure()
+					
+					// Passive health check
+					if cfg.PassiveHealthCheck && healthChecker != nil {
+						healthChecker.PassiveHealthCheck(backendURL, false)
+					}
 				} else {
 					cb.RecordSuccess()
+					backend.RecordSuccess()
+					
+					// Passive health check
+					if cfg.PassiveHealthCheck && healthChecker != nil {
+						healthChecker.PassiveHealthCheck(backendURL, true)
+					}
+				}
+			} else {
+				// No circuit breaker, still track for passive health check
+				if sw.code >= 500 {
+					backend.RecordFailure()
+					if cfg.PassiveHealthCheck && healthChecker != nil {
+						healthChecker.PassiveHealthCheck(backendURL, false)
+					}
+				} else {
+					backend.RecordSuccess()
+					if cfg.PassiveHealthCheck && healthChecker != nil {
+						healthChecker.PassiveHealthCheck(backendURL, true)
+					}
 				}
 			}
 

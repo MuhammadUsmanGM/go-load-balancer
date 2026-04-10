@@ -413,6 +413,167 @@ Update configuration without restarting the load balancer:
 
 **Note:** Some changes (like adding/removing backends) may require careful handling in production. The current implementation logs changes but doesn't dynamically add/remove backends without restart.
 
+## Advanced Health Checks
+
+The load balancer implements a sophisticated health checking system with multiple layers of backend monitoring:
+
+### Active Health Checking
+
+Periodic HTTP probes to detect backend failures:
+
+```json
+{
+  "health_check": {
+    "interval": "10s",
+    "path": "/health",
+    "timeout": "2s",
+    "unhealthy_threshold": 3,
+    "healthy_threshold": 2,
+    "slow_start_duration": "60s",
+    "passive_health_check_enabled": true
+  }
+}
+```
+
+**Configuration Options:**
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `interval` | Time between health check rounds | `10s` |
+| `path` | HTTP path to probe | `/health` |
+| `timeout` | Timeout for each health check request | `2s` |
+| `unhealthy_threshold` | Consecutive failures before marking unhealthy | `3` |
+| `healthy_threshold` | Consecutive successes before marking healthy | `2` |
+| `slow_start_duration` | Gradual traffic increase after recovery | `60s` |
+| `passive_health_check_enabled` | Mark unhealthy based on proxy errors | `true` |
+
+### Consecutive Failures Threshold
+
+Prevents false positives from transient errors:
+
+**How it works:**
+- Backend must fail `unhealthy_threshold` (3) consecutive times before being marked unhealthy
+- A single success resets the failure counter
+- Prevents marking backend unhealthy due to momentary blips
+
+**Example:**
+```
+Health Check 1: FAIL (consecutive failures: 1)
+Health Check 2: FAIL (consecutive failures: 2)
+Health Check 3: FAIL (consecutive failures: 3) → MARK UNHEALTHY
+
+vs.
+
+Health Check 1: FAIL (consecutive failures: 1)
+Health Check 2: FAIL (consecutive failures: 2)
+Health Check 3: SUCCESS (consecutive failures: 0, consecutive successes: 1)
+Health Check 4: FAIL (consecutive failures: 1) ← Reset, still healthy
+```
+
+### Passive Health Checking
+
+Monitor backend health based on actual proxy errors, not just health checks:
+
+**How it works:**
+- Every proxied request is tracked for success/failure
+- 5xx responses count as failures
+- Consecutive failures from proxy traffic also trigger unhealthy state
+- Provides faster detection than periodic health checks alone
+
+**Benefits:**
+- Detects issues between health check intervals
+- Catches application-level errors (5xx) that `/health` might miss
+- Faster response to backend degradation
+
+**Example:**
+```json
+{
+  "level": "error",
+  "message": "backend marked unhealthy (passive)",
+  "backend": "http://localhost:8081",
+  "consecutive_failures": 3
+}
+```
+
+### Slow Start After Recovery
+
+Gradually increase traffic to recovered backends to prevent overload:
+
+**How it works:**
+1. Backend recovers (passes health checks)
+2. Marked as healthy but enters "slow start" mode
+3. Receives reduced traffic (starts at 10% of normal)
+4. Traffic gradually increases over `slow_start_duration`
+5. After duration completes, receives full traffic
+
+**Traffic Ramp:**
+```
+Time 0s:   10% of normal traffic
+Time 15s:  32.5% of normal traffic (25% through 60s)
+Time 30s:  55% of normal traffic (50% through 60s)
+Time 45s:  77.5% of normal traffic (75% through 60s)
+Time 60s:  100% of normal traffic (slow start complete)
+```
+
+**Why it matters:**
+- Backend may need time to warm up caches, connection pools
+- Prevents overwhelming a backend that just recovered
+- Allows gradual load testing while monitoring stability
+
+**Prometheus Metrics:**
+- `lb_backend_slow_start_progress` - Current slow start progress (0.0 to 1.0)
+- `lb_backend_consecutive_failures` - Current consecutive failure count
+- `lb_backend_consecutive_successes` - Current consecutive success count
+
+### Health Check Flow
+
+Complete health check lifecycle:
+
+```
+1. Active Health Check (every 10s)
+   ├─ Probe /health endpoint
+   ├─ Track success/failure
+   └─ Update consecutive counters
+
+2. Passive Health Check (every request)
+   ├─ Track 5xx errors
+   ├─ Update consecutive counters
+   └─ Mark unhealthy if threshold reached
+
+3. State Transitions
+   ├─ Healthy → Unhealthy: After N consecutive failures
+   └─ Unhealthy → Healthy: After M consecutive successes
+
+4. Recovery
+   ├─ Mark recovered timestamp
+   ├─ Enter slow start mode
+   └─ Gradually increase traffic
+```
+
+### Health Check Best Practices
+
+1. **Design a meaningful `/health` endpoint:**
+   - Check database connectivity
+   - Verify external service connections
+   - Return 503 if not ready to serve traffic
+
+2. **Tune thresholds for your environment:**
+   - Low threshold (2-3): Fast detection, more false positives
+   - High threshold (5-10): Fewer false positives, slower detection
+
+3. **Enable passive health checking:**
+   - Catches issues that active checks miss
+   - Provides faster detection of degradation
+
+4. **Use slow start for stateful backends:**
+   - Databases, caches benefit from warmup period
+   - Prevents thundering herd on recovery
+
+5. **Monitor health metrics in Grafana:**
+   - Set alerts on consecutive failures
+   - Track slow start progress
+   - Monitor health check duration
+
 ## Testing
 
 ```bash

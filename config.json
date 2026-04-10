@@ -9,7 +9,11 @@
   "health_check": {
     "interval": "10s",
     "path": "/health",
-    "timeout": "2s"
+    "timeout": "2s",
+    "unhealthy_threshold": 3,
+    "healthy_threshold": 2,
+    "slow_start_duration": "60s",
+    "passive_health_check_enabled": true
   },
   "metrics": {
     "enabled": true,

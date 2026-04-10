@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // ErrNoHealthyBackends is returned when no healthy backends are available.
@@ -22,6 +23,13 @@ type Backend struct {
 
 	// Current weight for weighted round-robin (internal state).
 	currentWeight atomic.Int64
+
+	// Advanced health check tracking
+	consecutiveFailures atomic.Int64
+	consecutiveSuccesses atomic.Int64
+	recoveryTime        atomic.Int64 // timestamp when backend recovered (for slow start)
+	totalRequests       atomic.Int64
+	totalFailures       atomic.Int64
 }
 
 // IsHealthy returns the backend's current health status.
@@ -72,6 +80,76 @@ func (b *Backend) IncreaseCurrentWeight(w int) {
 // DecreaseCurrentWeight decreases the backend's current weight.
 func (b *Backend) DecreaseCurrentWeight(totalWeight int) {
 	b.currentWeight.Add(-int64(totalWeight))
+}
+
+// RecordFailure records a proxy error for passive health checking.
+func (b *Backend) RecordFailure() {
+	b.consecutiveFailures.Add(1)
+	b.consecutiveSuccesses.Store(0)
+	b.totalFailures.Add(1)
+}
+
+// RecordSuccess records a successful proxy response.
+func (b *Backend) RecordSuccess() {
+	b.consecutiveSuccesses.Add(1)
+	b.consecutiveFailures.Store(0)
+	b.totalRequests.Add(1)
+}
+
+// GetConsecutiveFailures returns the consecutive failure count.
+func (b *Backend) GetConsecutiveFailures() int64 {
+	return b.consecutiveFailures.Load()
+}
+
+// GetConsecutiveSuccesses returns the consecutive success count.
+func (b *Backend) GetConsecutiveSuccesses() int64 {
+	return b.consecutiveSuccesses.Load()
+}
+
+// MarkRecovered sets the backend as recovered and records the timestamp.
+func (b *Backend) MarkRecovered() {
+	b.recoveryTime.Store(time.Now().UnixMilli())
+}
+
+// GetRecoveryTime returns when the backend recovered.
+func (b *Backend) GetRecoveryTime() int64 {
+	return b.recoveryTime.Load()
+}
+
+// GetSlowStartWeight returns a weight multiplier based on slow start progress.
+// Returns 0.0 to 1.0 based on how far into the slow start period we are.
+func (b *Backend) GetSlowStartWeight(slowStartDuration time.Duration) float64 {
+	recoveryTime := b.GetRecoveryTime()
+	if recoveryTime == 0 {
+		return 1.0 // No slow start active
+	}
+
+	elapsed := time.Since(time.UnixMilli(recoveryTime))
+	if elapsed >= slowStartDuration {
+		return 1.0 // Slow start complete
+	}
+
+	// Linear ramp from 0.1 to 1.0
+	progress := float64(elapsed) / float64(slowStartDuration)
+	return 0.1 + (0.9 * progress)
+}
+
+// IncrementRequests tracks total requests for this backend.
+func (b *Backend) IncrementRequests() {
+	b.totalRequests.Add(1)
+}
+
+// GetStats returns backend health statistics.
+func (b *Backend) GetStats() map[string]interface{} {
+	return map[string]interface{}{
+		"healthy":                b.IsHealthy(),
+		"consecutive_failures":   b.consecutiveFailures.Load(),
+		"consecutive_successes":  b.consecutiveSuccesses.Load(),
+		"total_requests":         b.totalRequests.Load(),
+		"total_failures":         b.totalFailures.Load(),
+		"active_connections":     b.activeConns.Load(),
+		"recovery_time_ms":       b.recoveryTime.Load(),
+	}
 }
 
 // Balancer distributes requests across healthy backends using a configurable strategy.

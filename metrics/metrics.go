@@ -40,6 +40,15 @@ type Metrics struct {
 
 	// Backend weight.
 	BackendWeight *prometheus.GaugeVec
+
+	// Backend slow start progress (0.0 to 1.0).
+	BackendSlowStart *prometheus.GaugeVec
+
+	// Consecutive health check failures.
+	BackendConsecutiveFailures *prometheus.GaugeVec
+
+	// Consecutive health check successes.
+	BackendConsecutiveSuccesses *prometheus.GaugeVec
 }
 
 // NewMetrics creates and registers all Prometheus metrics.
@@ -132,6 +141,30 @@ func NewMetricsWithRegistry(reg prometheus.Registerer) *Metrics {
 			},
 			[]string{"backend"},
 		),
+
+		BackendSlowStart: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "lb_backend_slow_start_progress",
+				Help: "Backend slow start progress (0.0 to 1.0).",
+			},
+			[]string{"backend"},
+		),
+
+		BackendConsecutiveFailures: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "lb_backend_consecutive_failures",
+				Help: "Consecutive health check failures per backend.",
+			},
+			[]string{"backend"},
+		),
+
+		BackendConsecutiveSuccesses: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "lb_backend_consecutive_successes",
+				Help: "Consecutive health check successes per backend.",
+			},
+			[]string{"backend"},
+		),
 	}
 
 	// Register all metrics with the registry
@@ -145,6 +178,9 @@ func NewMetricsWithRegistry(reg prometheus.Registerer) *Metrics {
 	m.reg.MustRegister(m.ResponseSize)
 	m.reg.MustRegister(m.Goroutines)
 	m.reg.MustRegister(m.BackendWeight)
+	m.reg.MustRegister(m.BackendSlowStart)
+	m.reg.MustRegister(m.BackendConsecutiveFailures)
+	m.reg.MustRegister(m.BackendConsecutiveSuccesses)
 
 	return m
 }
@@ -184,6 +220,13 @@ func (m *Metrics) RecordHealthCheckFailure(backend string) {
 // SetBackendWeight updates the weight of a backend.
 func (m *Metrics) SetBackendWeight(backend string, weight int) {
 	m.BackendWeight.WithLabelValues(backend).Set(float64(weight))
+}
+
+// UpdateBackendHealthStats updates health check statistics for a backend.
+func (m *Metrics) UpdateBackendHealthStats(backend string, slowStartProgress float64, consecutiveFailures, consecutiveSuccesses int64) {
+	m.BackendSlowStart.WithLabelValues(backend).Set(slowStartProgress)
+	m.BackendConsecutiveFailures.WithLabelValues(backend).Set(float64(consecutiveFailures))
+	m.BackendConsecutiveSuccesses.WithLabelValues(backend).Set(float64(consecutiveSuccesses))
 }
 
 // UpdateGoroutines updates the goroutine count metric.

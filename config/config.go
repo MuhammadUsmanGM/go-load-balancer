@@ -7,14 +7,19 @@ import (
 )
 
 type BackendConfig struct {
-	URL    string `json:"url"`
-	Weight int    `json:"weight,omitempty"`
+	URL          string `json:"url"`
+	Weight       int    `json:"weight,omitempty"`
+	HealthPath   string `json:"health_path,omitempty"` // Custom health endpoint per backend
 }
 
 type HealthConfig struct {
-	Interval string `json:"interval"`
-	Path     string `json:"path"`
-	Timeout  string `json:"timeout"`
+	Interval                    string `json:"interval"`
+	Path                        string `json:"path"`
+	Timeout                     string `json:"timeout"`
+	UnhealthyThreshold        int    `json:"unhealthy_threshold"`         // consecutive failures before marking unhealthy
+	HealthyThreshold          int    `json:"healthy_threshold"`           // consecutive successes before marking healthy
+	SlowStartDuration         string `json:"slow_start_duration"`         // gradual traffic increase after recovery
+	PassiveHealthCheckEnabled bool   `json:"passive_health_check_enabled"` // mark unhealthy based on proxy errors
 }
 
 type MetricsConfig struct {
@@ -92,6 +97,17 @@ func Load(path string) (*Config, error) {
 	// Set default tracing config
 	if cfg.Tracing.Service == "" {
 		cfg.Tracing.Service = "go-load-balancer"
+	}
+
+	// Set default health check config
+	if cfg.HealthCheck.UnhealthyThreshold == 0 {
+		cfg.HealthCheck.UnhealthyThreshold = 3 // 3 consecutive failures
+	}
+	if cfg.HealthCheck.HealthyThreshold == 0 {
+		cfg.HealthCheck.HealthyThreshold = 2 // 2 consecutive successes
+	}
+	if cfg.HealthCheck.Path == "" {
+		cfg.HealthCheck.Path = "/health"
 	}
 
 	// Set default rate limit config

@@ -103,9 +103,29 @@ func main() {
 		logger.Error("invalid health check timeout", map[string]interface{}{"error": err.Error()})
 		os.Exit(1)
 	}
+	
+	// Parse slow start duration
+	var slowStartDuration time.Duration
+	if cfg.HealthCheck.SlowStartDuration != "" {
+		slowStartDuration, err = time.ParseDuration(cfg.HealthCheck.SlowStartDuration)
+		if err != nil {
+			logger.Error("invalid slow start duration", map[string]interface{}{"error": err.Error()})
+			os.Exit(1)
+		}
+	}
 
-	// Start health checker
-	checker := health.NewChecker(bal, interval, cfg.HealthCheck.Path, timeout, logger, met)
+	// Start health checker with advanced config
+	healthCfg := health.CheckerConfig{
+		Interval:             interval,
+		DefaultPath:          cfg.HealthCheck.Path,
+		Timeout:              timeout,
+		UnhealthyThreshold:   cfg.HealthCheck.UnhealthyThreshold,
+		HealthyThreshold:     cfg.HealthCheck.HealthyThreshold,
+		SlowStartDuration:    slowStartDuration,
+		PassiveEnabled:       cfg.HealthCheck.PassiveHealthCheckEnabled,
+	}
+	
+	checker := health.NewChecker(bal, healthCfg, logger, met)
 	checker.Start(ctx)
 
 	// Create rate limiter
@@ -153,6 +173,7 @@ func main() {
 		MaxConnsPerHost:     cfg.ConnectionPool.MaxConnsPerHost,
 		MaxRetries:          cfg.Retry.MaxRetries,
 		RetryEnabled:        cfg.Retry.Enabled,
+		PassiveHealthCheck:  cfg.HealthCheck.PassiveHealthCheckEnabled,
 	}
 
 	// Build handler chain with middleware
@@ -163,8 +184,8 @@ func main() {
 		mux.Handle(cfg.Metrics.Path, met.Handler())
 	}
 
-	// Create proxy handler
-	proxyHandler := proxy.NewHandler(bal, met, logger, proxyCfg, circuitBreakers)
+	// Create proxy handler with health checker for passive monitoring
+	proxyHandler := proxy.NewHandler(bal, met, logger, proxyCfg, circuitBreakers, checker)
 
 	// Apply middleware chain: Tracing -> RequestID -> RateLimit -> Proxy
 	var handler http.Handler = proxyHandler
@@ -215,6 +236,9 @@ func main() {
 
 	// Periodically update runtime metrics
 	go updateRuntimeMetrics(ctx, met, 10*time.Second)
+	
+	// Periodically update backend health stats
+	go updateBackendHealthStats(ctx, met, bal, 5*time.Second, slowStartDuration)
 
 	// Start config hot-reload if enabled
 	var reloadOnce sync.Once
@@ -294,6 +318,29 @@ func updateRuntimeMetrics(ctx context.Context, met *metrics.Metrics, interval ti
 		case <-ticker.C:
 			runtime.ReadMemStats(nil)
 			met.UpdateGoroutines(runtime.NumGoroutine())
+		}
+	}
+}
+
+// updateBackendHealthStats periodically updates health statistics for all backends.
+func updateBackendHealthStats(ctx context.Context, met *metrics.Metrics, bal *balancer.Balancer, interval, slowStartDuration time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for _, backend := range bal.GetBackends() {
+				slowStartProgress := backend.GetSlowStartWeight(slowStartDuration)
+				met.UpdateBackendHealthStats(
+					backend.URL.String(),
+					slowStartProgress,
+					backend.GetConsecutiveFailures(),
+					backend.GetConsecutiveSuccesses(),
+				)
+			}
 		}
 	}
 }
