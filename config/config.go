@@ -29,13 +29,41 @@ type TracingConfig struct {
 	Service  string `json:"service"`
 }
 
+type RateLimitConfig struct {
+	Enabled bool    `json:"enabled"`
+	Rate    float64 `json:"rate"`  // requests per second
+	Burst   int64   `json:"burst"` // max burst size
+}
+
+type CircuitBreakerConfig struct {
+	Enabled          bool   `json:"enabled"`
+	FailureThreshold int64  `json:"failure_threshold"` // failures before opening
+	RecoveryTimeout  string `json:"recovery_timeout"`  // Go duration
+}
+
+type ConnectionPoolConfig struct {
+	MaxIdleConns        int    `json:"max_idle_conns"`
+	MaxIdleConnsPerHost int    `json:"max_idle_conns_per_host"`
+	IdleConnTimeout     string `json:"idle_conn_timeout"`
+	MaxConnsPerHost     int    `json:"max_conns_per_host"`
+}
+
+type RetryConfig struct {
+	Enabled bool `json:"enabled"`
+	MaxRetries int `json:"max_retries"`
+}
+
 type Config struct {
-	ListenAddr  string          `json:"listen_addr"`
-	Backends    []BackendConfig `json:"backends"`
-	HealthCheck HealthConfig    `json:"health_check"`
-	Strategy    string          `json:"strategy,omitempty"`
-	Metrics     MetricsConfig   `json:"metrics"`
-	Tracing     TracingConfig   `json:"tracing"`
+	ListenAddr     string             `json:"listen_addr"`
+	Backends       []BackendConfig    `json:"backends"`
+	HealthCheck    HealthConfig       `json:"health_check"`
+	Strategy       string             `json:"strategy,omitempty"`
+	Metrics        MetricsConfig      `json:"metrics"`
+	Tracing        TracingConfig      `json:"tracing"`
+	RateLimit      RateLimitConfig    `json:"rate_limit"`
+	CircuitBreaker CircuitBreakerConfig `json:"circuit_breaker"`
+	ConnectionPool ConnectionPoolConfig `json:"connection_pool"`
+	Retry          RetryConfig        `json:"retry"`
 }
 
 func Load(path string) (*Config, error) {
@@ -64,6 +92,35 @@ func Load(path string) (*Config, error) {
 	// Set default tracing config
 	if cfg.Tracing.Service == "" {
 		cfg.Tracing.Service = "go-load-balancer"
+	}
+
+	// Set default rate limit config
+	if cfg.RateLimit.Rate == 0 {
+		cfg.RateLimit.Rate = 100 // 100 req/s
+	}
+	if cfg.RateLimit.Burst == 0 {
+		cfg.RateLimit.Burst = 20 // burst of 20
+	}
+
+	// Set default circuit breaker config
+	if cfg.CircuitBreaker.FailureThreshold == 0 {
+		cfg.CircuitBreaker.FailureThreshold = 5
+	}
+	if cfg.CircuitBreaker.RecoveryTimeout == "" {
+		cfg.CircuitBreaker.RecoveryTimeout = "30s"
+	}
+
+	// Set default connection pool config
+	if cfg.ConnectionPool.MaxIdleConnsPerHost == 0 {
+		cfg.ConnectionPool.MaxIdleConnsPerHost = 100
+	}
+	if cfg.ConnectionPool.IdleConnTimeout == "" {
+		cfg.ConnectionPool.IdleConnTimeout = "90s"
+	}
+
+	// Set default retry config
+	if cfg.Retry.MaxRetries == 0 {
+		cfg.Retry.MaxRetries = 2
 	}
 
 	return &cfg, nil

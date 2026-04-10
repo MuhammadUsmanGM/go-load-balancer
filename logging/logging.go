@@ -32,6 +32,11 @@ func (l *Logger) Error(msg string, fields map[string]interface{}) {
 	l.write("error", msg, fields)
 }
 
+// Warn logs a message at warn level.
+func (l *Logger) Warn(msg string, fields map[string]interface{}) {
+	l.write("warn", msg, fields)
+}
+
 // WithRequestID logs a message with request ID from context.
 func (l *Logger) WithRequestID(ctx context.Context, level, msg string, fields map[string]interface{}) {
 	if fields == nil {

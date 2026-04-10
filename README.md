@@ -16,6 +16,39 @@ A production-grade HTTP load balancer written in Go with **advanced observabilit
 - **Connection tracking** -- monitors active connections for intelligent load balancing
 - **JSON configuration** -- simple file-based setup, no external dependencies
 
+### 🛡️ Production Features
+
+- **Rate Limiting**:
+  - Token bucket algorithm per client IP
+  - Configurable rate and burst size
+  - Automatic client tracking
+  - HTTP 429 response when limit exceeded
+  
+- **Circuit Breaker Pattern**:
+  - Three states: Closed, Half-Open, Open
+  - Configurable failure threshold
+  - Automatic recovery with half-open testing
+  - Prevents cascading failures
+  - Per-backend circuit breakers
+  
+- **Connection Pooling**:
+  - Configurable max idle connections
+  - Per-host connection limits
+  - Idle connection timeout
+  - Connection reuse optimization
+  
+- **Request Retry**:
+  - Automatic retry on backend failures (5xx errors)
+  - Configurable max retry attempts
+  - Intelligent backend selection on retry
+  - Retry attempt tracking in logs
+  
+- **Hot-Reload Configuration**:
+  - Watch config file for changes using fsnotify
+  - Zero-downtime config updates
+  - Automatic reload without restart
+  - Graceful transition to new settings
+
 ### 📊 Advanced Observability
 
 - **Prometheus Metrics**:
@@ -245,6 +278,140 @@ A pre-built Grafana dashboard is included at `grafana-dashboard.json`. It provid
 2. Upload `grafana-dashboard.json`
 3. Select your Prometheus data source
 4. Dashboard will appear as "Go Load Balancer - Observability Dashboard"
+
+## Production Features
+
+### Rate Limiting
+
+The load balancer includes a token bucket rate limiter that tracks requests per client IP:
+
+```json
+{
+  "rate_limit": {
+    "enabled": true,
+    "rate": 100,      // requests per second
+    "burst": 20       // max burst size
+  }
+}
+```
+
+**How it works:**
+- Each client IP gets its own token bucket
+- Tokens refill at the configured rate (100/sec = 1 token per 10ms)
+- Burst allows temporary spikes up to the burst limit
+- Returns HTTP 429 (Too Many Requests) when limit exceeded
+
+**Example:**
+```bash
+# With rate=100 and burst=20, you can send 20 requests instantly
+# Then 100 more per second
+for i in {1..25}; do curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/; done
+# First 20: 200 OK, Next 5: 429 Too Many Requests
+```
+
+### Circuit Breaker
+
+Prevents cascading failures by stopping traffic to failing backends:
+
+```json
+{
+  "circuit_breaker": {
+    "enabled": true,
+    "failure_threshold": 5,        // failures before opening
+    "recovery_timeout": "30s"      // time before testing recovery
+  }
+}
+```
+
+**Circuit Breaker States:**
+1. **Closed** - Normal operation, tracking failures count
+2. **Open** - Rejecting all requests after reaching threshold
+3. **Half-Open** - Testing if backend recovered (after recovery timeout)
+
+**Lifecycle:**
+1. Backend fails 5 times → Circuit opens (rejects requests)
+2. After 30 seconds → Circuit goes half-open (allows 1 test request)
+3. Test succeeds → Circuit closes (normal operation resumes)
+4. Test fails → Circuit reopens (wait another 30s)
+
+### Connection Pooling
+
+Optimize connection reuse with configurable pooling:
+
+```json
+{
+  "connection_pool": {
+    "max_idle_conns": 100,              // global max idle connections
+    "max_idle_conns_per_host": 100,     // per-backend idle connections
+    "idle_conn_timeout": "90s",         // how long to keep idle conns
+    "max_conns_per_host": 100           // total connections per backend
+  }
+}
+```
+
+**Best Practices:**
+- Set `max_idle_conns_per_host` based on expected concurrent requests
+- Higher values = better performance but more memory
+- `idle_conn_timeout` prevents stale connections
+
+### Request Retry
+
+Automatically retry failed requests on different backends:
+
+```json
+{
+  "retry": {
+    "enabled": true,
+    "max_retries": 2    // retry up to 2 times
+  }
+}
+```
+
+**How it works:**
+1. Request to Backend A fails (5xx error)
+2. Retry on Backend B (different backend via load balancer)
+3. If B also fails, retry on Backend C
+4. Logs include attempt count for debugging
+
+**Example log output:**
+```json
+{
+  "level": "info",
+  "message": "retrying request",
+  "backend": "http://localhost:8081",
+  "status": 502,
+  "attempt": 1,
+  "max_retry": 2
+}
+```
+
+### Hot-Reload Configuration
+
+Update configuration without restarting the load balancer:
+
+**How it works:**
+1. Load balancer watches `config.json` for changes
+2. On file save, automatically reloads configuration
+3. Applies new settings gracefully
+
+**What can be changed:**
+- Backend weights (traffic distribution)
+- Rate limits
+- Circuit breaker thresholds
+- Connection pool settings
+- Retry configuration
+
+**Example:**
+```bash
+# In one terminal, run the load balancer
+./go-load-balancer config.json
+
+# In another terminal, edit config.json
+# Change a backend weight from 1 to 3
+# Save the file - changes apply automatically!
+```
+
+**Note:** Some changes (like adding/removing backends) may require careful handling in production. The current implementation logs changes but doesn't dynamically add/remove backends without restart.
 
 ## Testing
 
