@@ -7,7 +7,8 @@ import (
 )
 
 type BackendConfig struct {
-	URL string `json:"url"`
+	URL    string `json:"url"`
+	Weight int    `json:"weight,omitempty"`
 }
 
 type HealthConfig struct {
@@ -20,6 +21,7 @@ type Config struct {
 	ListenAddr  string          `json:"listen_addr"`
 	Backends    []BackendConfig `json:"backends"`
 	HealthCheck HealthConfig    `json:"health_check"`
+	Strategy    string          `json:"strategy,omitempty"`
 }
 
 func Load(path string) (*Config, error) {
@@ -31,5 +33,11 @@ func Load(path string) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+
+	// Set default strategy if not specified
+	if cfg.Strategy == "" {
+		cfg.Strategy = "round-robin"
+	}
+
 	return &cfg, nil
 }

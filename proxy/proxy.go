@@ -44,7 +44,7 @@ func NewHandler(b *balancer.Balancer, m *metrics.Metrics, l *logging.Logger) htt
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		backend, err := b.Next()
+		backend, err := b.Next(r)
 		if err != nil {
 			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 			l.Error("no healthy backends", map[string]interface{}{
@@ -56,6 +56,8 @@ func NewHandler(b *balancer.Balancer, m *metrics.Metrics, l *logging.Logger) htt
 		}
 
 		backendURL := backend.URL.String()
+		backend.IncrementConnections()
+		defer backend.DecrementConnections()
 
 		proxy := &httputil.ReverseProxy{
 			Director: func(req *http.Request) {
