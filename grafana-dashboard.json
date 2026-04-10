@@ -1,0 +1,197 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "go-load-balancer",
+    "title": "Go Load Balancer - Observability Dashboard",
+    "tags": ["load-balancer", "go", "prometheus"],
+    "timezone": "browser",
+    "schemaVersion": 16,
+    "version": 0,
+    "refresh": "5s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Request Rate (req/s)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "rate(lb_requests_total[1m])",
+            "legendFormat": "{{backend}} - {{status_code}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"label": "Requests/sec", "show": true},
+          {"show": true}
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Request Duration (p50, p95, p99)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(lb_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "p50",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(lb_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "p95",
+            "refId": "B"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(lb_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "p99",
+            "refId": "C"
+          }
+        ],
+        "yaxes": [
+          {"label": "Duration (s)", "format": "s", "show": true},
+          {"show": true}
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Active Connections by Backend",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "lb_active_connections",
+            "legendFormat": "{{backend}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"label": "Connections", "show": true},
+          {"show": true}
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Backend Health Status",
+        "type": "singlestat",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "lb_backend_healthy",
+            "legendFormat": "{{backend}}",
+            "refId": "A"
+          }
+        ],
+        "valueName": "current",
+        "colorBackground": true,
+        "thresholds": "0.5,1",
+        "colors": ["#bf1b00", "#f2c96d", "#7eb26d"]
+      },
+      {
+        "id": 5,
+        "title": "Health Check Duration",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "rate(lb_healthcheck_duration_seconds_sum[5m]) / rate(lb_healthcheck_duration_seconds_count[5m])",
+            "legendFormat": "{{backend}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"label": "Duration (s)", "format": "s", "show": true},
+          {"show": true}
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Health Check Failures",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "rate(lb_healthcheck_failures_total[5m])",
+            "legendFormat": "{{backend}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"label": "Failures/sec", "show": true},
+          {"show": true}
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Response Size Distribution",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(lb_response_size_bytes_bucket[5m]))",
+            "legendFormat": "p50",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(lb_response_size_bytes_bucket[5m]))",
+            "legendFormat": "p95",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"label": "Bytes", "format": "bytes", "show": true},
+          {"show": true}
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Error Rate (5xx responses)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+        "targets": [
+          {
+            "expr": "rate(lb_requests_total{status_code=~\"5..\"}[1m])",
+            "legendFormat": "{{backend}} - {{status_code}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"label": "Errors/sec", "show": true},
+          {"show": true}
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Goroutines",
+        "type": "singlestat",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 32},
+        "targets": [
+          {
+            "expr": "lb_goroutines",
+            "refId": "A"
+          }
+        ],
+        "valueName": "current",
+        "sparkline": {"show": true, "full": false}
+      },
+      {
+        "id": 10,
+        "title": "Backend Weights",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32},
+        "targets": [
+          {
+            "expr": "lb_backend_weight",
+            "legendFormat": "{{backend}}",
+            "refId": "A"
+          }
+        ]
+      }
+    ],
+    "time": {"from": "now-1h", "to": "now"},
+    "timepicker": {
+      "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"]
+    }
+  },
+  "overwrite": true
+}

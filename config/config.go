@@ -17,11 +17,25 @@ type HealthConfig struct {
 	Timeout  string `json:"timeout"`
 }
 
+type MetricsConfig struct {
+	Enabled bool   `json:"enabled"`
+	Path    string `json:"path"`
+}
+
+type TracingConfig struct {
+	Enabled  bool   `json:"enabled"`
+	Endpoint string `json:"endpoint"`
+	Insecure bool   `json:"insecure"`
+	Service  string `json:"service"`
+}
+
 type Config struct {
 	ListenAddr  string          `json:"listen_addr"`
 	Backends    []BackendConfig `json:"backends"`
 	HealthCheck HealthConfig    `json:"health_check"`
 	Strategy    string          `json:"strategy,omitempty"`
+	Metrics     MetricsConfig   `json:"metrics"`
+	Tracing     TracingConfig   `json:"tracing"`
 }
 
 func Load(path string) (*Config, error) {
@@ -37,6 +51,19 @@ func Load(path string) (*Config, error) {
 	// Set default strategy if not specified
 	if cfg.Strategy == "" {
 		cfg.Strategy = "round-robin"
+	}
+
+	// Set default metrics config
+	if !cfg.Metrics.Enabled {
+		cfg.Metrics.Enabled = true
+	}
+	if cfg.Metrics.Path == "" {
+		cfg.Metrics.Path = "/metrics"
+	}
+
+	// Set default tracing config
+	if cfg.Tracing.Service == "" {
+		cfg.Tracing.Service = "go-load-balancer"
 	}
 
 	return &cfg, nil

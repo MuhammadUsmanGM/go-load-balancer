@@ -1,63 +1,197 @@
 package metrics
 
 import (
-	"encoding/json"
 	"net/http"
-	"sync"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Metrics tracks request counts, status codes, and per-backend stats.
+// Metrics holds Prometheus metrics for the load balancer.
 type Metrics struct {
-	mu            sync.Mutex
-	totalRequests int64
-	statusCodes   map[int]int64
-	backendCounts map[string]int64
+	reg prometheus.Registerer
+
+	// Total HTTP requests received.
+	TotalRequests *prometheus.CounterVec
+
+	// Request duration by backend and status code.
+	RequestDuration *prometheus.HistogramVec
+
+	// Active connections per backend.
+	ActiveConnections *prometheus.GaugeVec
+
+	// Backend health status (1 = healthy, 0 = unhealthy).
+	BackendHealthy *prometheus.GaugeVec
+
+	// Health check duration.
+	HealthCheckDuration *prometheus.HistogramVec
+
+	// Health check failures per backend.
+	HealthCheckFailures *prometheus.CounterVec
+
+	// Requests per second by backend.
+	RequestsPerSecond *prometheus.CounterVec
+
+	// Response size in bytes.
+	ResponseSize *prometheus.HistogramVec
+
+	// Current running goroutines.
+	Goroutines prometheus.Gauge
+
+	// Backend weight.
+	BackendWeight *prometheus.GaugeVec
 }
 
-// NewMetrics creates a new metrics collector.
+// NewMetrics creates and registers all Prometheus metrics.
 func NewMetrics() *Metrics {
-	return &Metrics{
-		statusCodes:   make(map[int]int64),
-		backendCounts: make(map[string]int64),
+	return NewMetricsWithRegistry(prometheus.DefaultRegisterer)
+}
+
+// NewMetricsWithRegistry creates metrics with a custom Prometheus registry.
+func NewMetricsWithRegistry(reg prometheus.Registerer) *Metrics {
+	m := &Metrics{
+		reg: reg,
+		TotalRequests: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "lb_requests_total",
+				Help: "Total number of HTTP requests received by the load balancer.",
+			},
+			[]string{"backend", "status_code", "method"},
+		),
+
+		RequestDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "lb_request_duration_seconds",
+				Help:    "HTTP request latency in seconds.",
+				Buckets: prometheus.DefBuckets,
+			},
+			[]string{"backend", "status_code", "method"},
+		),
+
+		ActiveConnections: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "lb_active_connections",
+				Help: "Number of active connections per backend.",
+			},
+			[]string{"backend"},
+		),
+
+		BackendHealthy: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "lb_backend_healthy",
+				Help: "Backend health status (1 = healthy, 0 = unhealthy).",
+			},
+			[]string{"backend"},
+		),
+
+		HealthCheckDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "lb_healthcheck_duration_seconds",
+				Help:    "Health check request latency in seconds.",
+				Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
+			},
+			[]string{"backend"},
+		),
+
+		HealthCheckFailures: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "lb_healthcheck_failures_total",
+				Help: "Total number of health check failures per backend.",
+			},
+			[]string{"backend"},
+		),
+
+		RequestsPerSecond: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "lb_requests_per_second",
+				Help: "Rate of requests per backend.",
+			},
+			[]string{"backend"},
+		),
+
+		ResponseSize: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "lb_response_size_bytes",
+				Help:    "Response size in bytes.",
+				Buckets: []float64{100, 1000, 10000, 100000, 1e6, 1e7},
+			},
+			[]string{"backend", "status_code"},
+		),
+
+		Goroutines: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "lb_goroutines",
+				Help: "Current number of goroutines.",
+			},
+		),
+
+		BackendWeight: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "lb_backend_weight",
+				Help: "Backend weight for weighted round-robin.",
+			},
+			[]string{"backend"},
+		),
 	}
+
+	// Register all metrics with the registry
+	m.reg.MustRegister(m.TotalRequests)
+	m.reg.MustRegister(m.RequestDuration)
+	m.reg.MustRegister(m.ActiveConnections)
+	m.reg.MustRegister(m.BackendHealthy)
+	m.reg.MustRegister(m.HealthCheckDuration)
+	m.reg.MustRegister(m.HealthCheckFailures)
+	m.reg.MustRegister(m.RequestsPerSecond)
+	m.reg.MustRegister(m.ResponseSize)
+	m.reg.MustRegister(m.Goroutines)
+	m.reg.MustRegister(m.BackendWeight)
+
+	return m
 }
 
-// Record increments counters for a proxied request.
-func (m *Metrics) Record(backendURL string, statusCode int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.totalRequests++
-	m.statusCodes[statusCode]++
-	m.backendCounts[backendURL]++
+// Record records a completed request with duration and status.
+func (m *Metrics) Record(backend, statusCode, method string, durationSeconds float64, responseSize int64) {
+	m.TotalRequests.WithLabelValues(backend, statusCode, method).Inc()
+	m.RequestDuration.WithLabelValues(backend, statusCode, method).Observe(durationSeconds)
+	m.RequestsPerSecond.WithLabelValues(backend).Inc()
+	m.ResponseSize.WithLabelValues(backend, statusCode).Observe(float64(responseSize))
 }
 
-type snapshot struct {
-	TotalRequests int64            `json:"total_requests"`
-	StatusCodes   map[int]int64    `json:"status_codes"`
-	BackendCounts map[string]int64 `json:"backend_counts"`
+// SetActiveConnections updates the active connection count for a backend.
+func (m *Metrics) SetActiveConnections(backend string, count uint64) {
+	m.ActiveConnections.WithLabelValues(backend).Set(float64(count))
 }
 
-// Handler returns an HTTP handler that serves metrics as JSON.
-func (m *Metrics) Handler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		m.mu.Lock()
-		// Copy maps so we don't hold lock during JSON encoding.
-		sc := make(map[int]int64, len(m.statusCodes))
-		for k, v := range m.statusCodes {
-			sc[k] = v
-		}
-		bc := make(map[string]int64, len(m.backendCounts))
-		for k, v := range m.backendCounts {
-			bc[k] = v
-		}
-		s := snapshot{
-			TotalRequests: m.totalRequests,
-			StatusCodes:   sc,
-			BackendCounts: bc,
-		}
-		m.mu.Unlock()
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(s)
+// SetBackendHealthy updates the health status of a backend.
+func (m *Metrics) SetBackendHealthy(backend string, healthy bool) {
+	value := 0.0
+	if healthy {
+		value = 1.0
 	}
+	m.BackendHealthy.WithLabelValues(backend).Set(value)
+}
+
+// RecordHealthCheckDuration records a health check duration.
+func (m *Metrics) RecordHealthCheckDuration(backend string, durationSeconds float64) {
+	m.HealthCheckDuration.WithLabelValues(backend).Observe(durationSeconds)
+}
+
+// RecordHealthCheckFailure records a health check failure.
+func (m *Metrics) RecordHealthCheckFailure(backend string) {
+	m.HealthCheckFailures.WithLabelValues(backend).Inc()
+}
+
+// SetBackendWeight updates the weight of a backend.
+func (m *Metrics) SetBackendWeight(backend string, weight int) {
+	m.BackendWeight.WithLabelValues(backend).Set(float64(weight))
+}
+
+// UpdateGoroutines updates the goroutine count metric.
+func (m *Metrics) UpdateGoroutines(count int) {
+	m.Goroutines.Set(float64(count))
+}
+
+// Handler returns an HTTP handler that serves Prometheus metrics.
+func (m *Metrics) Handler() http.Handler {
+	return promhttp.Handler()
 }

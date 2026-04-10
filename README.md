@@ -1,8 +1,10 @@
 # Go HTTP Load Balancer
 
-A lightweight HTTP load balancer written in Go using only the standard library. It distributes incoming requests across multiple backends using **multiple configurable strategies**, with automatic health checking, request metrics, and structured JSON logging.
+A production-grade HTTP load balancer written in Go with **advanced observability features** including Prometheus metrics, distributed tracing with OpenTelemetry, request ID tracking, and structured logging. It distributes incoming requests across multiple backends using **multiple configurable strategies**, with automatic health checking and real-time metrics.
 
 ## Features
+
+### 🎯 Load Balancing
 
 - **Multiple Load Balancing Strategies**:
   - **Round-Robin** -- distributes requests evenly across backends in rotation
@@ -11,10 +13,35 @@ A lightweight HTTP load balancer written in Go using only the standard library. 
   - **IP Hash** -- ensures session persistence by routing same client IP to same backend
   - **Random with 2 Choices** -- picks 2 random backends, selects the lesser-loaded one
 - **Active health checks** -- periodic HTTP probes to detect backend failures
-- **Request metrics** -- total requests, per-backend counts, and status code breakdown via `/metrics`
-- **Structured JSON logging** -- machine-readable log output to stdout
-- **JSON configuration** -- simple file-based setup, no external dependencies
 - **Connection tracking** -- monitors active connections for intelligent load balancing
+- **JSON configuration** -- simple file-based setup, no external dependencies
+
+### 📊 Advanced Observability
+
+- **Prometheus Metrics**:
+  - Request rate and duration (histograms with p50, p95, p99)
+  - Active connections per backend (gauges)
+  - Backend health status (gauges)
+  - Health check duration and failures (histograms & counters)
+  - Response size distribution (histograms)
+  - Go runtime metrics (goroutines)
+  
+- **Distributed Tracing (OpenTelemetry)**:
+  - Full request lifecycle tracing
+  - Trace context propagation via W3C TraceContext
+  - Compatible with Jaeger, Zipkin, and other OpenTelemetry backends
+  - Automatic span creation with HTTP attributes
+  
+- **Request ID Tracking**:
+  - Auto-generated unique request IDs (`X-Request-ID` header)
+  - Propagated through all logs and traces
+  - Supports incoming request ID preservation
+  
+- **Structured JSON Logging**:
+  - Machine-readable log output
+  - Request IDs embedded in all log entries
+  - Timestamp, level, message, and custom fields
+  - Service name and metadata
 
 ## Architecture
 
@@ -81,6 +108,16 @@ All settings are defined in `config.json`:
     "interval": "10s",
     "path": "/health",
     "timeout": "2s"
+  },
+  "metrics": {
+    "enabled": true,
+    "path": "/metrics"
+  },
+  "tracing": {
+    "enabled": false,
+    "endpoint": "localhost:4318",
+    "insecure": true,
+    "service": "go-load-balancer"
   }
 }
 ```
@@ -94,6 +131,12 @@ All settings are defined in `config.json`:
 | `health_check.interval` | Time between health check rounds (Go duration, e.g. `10s`) |
 | `health_check.path` | HTTP path to probe on each backend |
 | `health_check.timeout` | Timeout for each health check request |
+| `metrics.enabled` | Enable Prometheus metrics endpoint (default: `true`) |
+| `metrics.path` | Path for metrics endpoint (default: `/metrics`) |
+| `tracing.enabled` | Enable OpenTelemetry distributed tracing (default: `false`) |
+| `tracing.endpoint` | OTLP endpoint for trace export (default: `localhost:4318`) |
+| `tracing.insecure` | Use insecure connection for OTLP endpoint (default: `true`) |
+| `tracing.service` | Service name for traces (default: `go-load-balancer`) |
 
 ### Load Balancing Strategies
 
@@ -110,21 +153,98 @@ All settings are defined in `config.json`:
 | Endpoint | Description |
 |----------|-------------|
 | `/*` | All requests are proxied to the next healthy backend |
-| `/metrics` | Returns JSON with request counts and status code breakdown |
+| `/metrics` | Prometheus metrics endpoint (scrape with Prometheus or view in browser) |
 
-### Metrics response example
+### Response Headers
 
+All responses include:
+- `X-Request-ID`: Unique request identifier for tracing and debugging
+
+## Prometheus Metrics
+
+The load balancer exposes comprehensive Prometheus metrics at `/metrics`:
+
+### Request Metrics
+- `lb_requests_total` - Total HTTP requests (labels: backend, status_code, method)
+- `lb_request_duration_seconds` - Request latency histogram (labels: backend, status_code, method)
+- `lb_requests_per_second` - Request rate per backend
+- `lb_response_size_bytes` - Response size histogram
+
+### Connection Metrics
+- `lb_active_connections` - Active connections per backend (gauge)
+- `lb_backend_healthy` - Backend health status (1 = healthy, 0 = unhealthy)
+- `lb_backend_weight` - Backend weight configuration
+
+### Health Check Metrics
+- `lb_healthcheck_duration_seconds` - Health check latency histogram
+- `lb_healthcheck_failures_total` - Total health check failures
+
+### Runtime Metrics
+- `lb_goroutines` - Current number of goroutines
+
+### Example Prometheus Configuration
+
+```yaml
+scrape_configs:
+  - job_name: 'load-balancer'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['localhost:8080']
+```
+
+## Distributed Tracing
+
+The load balancer supports distributed tracing via OpenTelemetry. To enable tracing:
+
+1. **Configure tracing in `config.json`**:
 ```json
 {
-  "total_requests": 150,
-  "status_codes": {"200": 145, "502": 5},
-  "backend_counts": {
-    "http://localhost:8081": 50,
-    "http://localhost:8082": 50,
-    "http://localhost:8083": 50
+  "tracing": {
+    "enabled": true,
+    "endpoint": "localhost:4318",
+    "insecure": true,
+    "service": "go-load-balancer"
   }
 }
 ```
+
+2. **Start an OpenTelemetry collector** (e.g., Jaeger):
+```bash
+docker run -d --name jaeger \
+  -e COLLECTOR_OTLP_ENABLED=true \
+  -p 16686:16686 \
+  -p 4318:4318 \
+  jaegertracing/all-in-one:latest
+```
+
+3. **View traces** at http://localhost:16686
+
+### Trace Context Propagation
+
+The load balancer automatically:
+- Extracts trace context from incoming requests (W3C TraceContext)
+- Creates spans for each request with HTTP attributes
+- Propagates trace context to backend services
+- Includes request ID in span attributes
+
+## Grafana Dashboard
+
+A pre-built Grafana dashboard is included at `grafana-dashboard.json`. It provides:
+
+- Request rate and duration graphs (p50, p95, p99)
+- Active connections per backend
+- Backend health status indicators
+- Health check performance
+- Error rate tracking
+- Response size distribution
+- Runtime metrics
+
+### Import Dashboard
+
+1. Open Grafana and go to **Dashboards > Import**
+2. Upload `grafana-dashboard.json`
+3. Select your Prometheus data source
+4. Dashboard will appear as "Go Load Balancer - Observability Dashboard"
 
 ## Testing
 

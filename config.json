@@ -10,5 +10,15 @@
     "interval": "10s",
     "path": "/health",
     "timeout": "2s"
+  },
+  "metrics": {
+    "enabled": true,
+    "path": "/metrics"
+  },
+  "tracing": {
+    "enabled": false,
+    "endpoint": "localhost:4318",
+    "insecure": true,
+    "service": "go-load-balancer"
   }
 }

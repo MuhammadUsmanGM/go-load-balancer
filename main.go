@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -15,7 +16,9 @@ import (
 	"github.com/go-load-balancer/health"
 	"github.com/go-load-balancer/logging"
 	"github.com/go-load-balancer/metrics"
+	"github.com/go-load-balancer/middleware"
 	"github.com/go-load-balancer/proxy"
+	"github.com/go-load-balancer/tracing"
 )
 
 func main() {
@@ -30,6 +33,32 @@ func main() {
 	if err != nil {
 		logger.Error("failed to load config", map[string]interface{}{"error": err.Error()})
 		os.Exit(1)
+	}
+
+	// Initialize OpenTelemetry tracer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tp, err := tracing.InitTracer(ctx, tracing.Config{
+		Enabled:  cfg.Tracing.Enabled,
+		Endpoint: cfg.Tracing.Endpoint,
+		Insecure: cfg.Tracing.Insecure,
+		Service:  cfg.Tracing.Service,
+		Version:  "1.0.0",
+	})
+	if err != nil {
+		logger.Error("failed to initialize tracer", map[string]interface{}{"error": err.Error()})
+		// Continue without tracing
+	} else {
+		defer func() {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			tracing.Shutdown(shutdownCtx, tp)
+		}()
+		logger.Info("tracing initialized", map[string]interface{}{
+			"service": cfg.Tracing.Service,
+			"enabled": cfg.Tracing.Enabled,
+		})
 	}
 
 	// Build backends with weights
@@ -54,7 +83,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize Prometheus metrics
 	met := metrics.NewMetrics()
+
+	// Set initial backend weights in metrics
+	for _, b := range cfg.Backends {
+		met.SetBackendWeight(b.URL, b.Weight)
+	}
 
 	interval, err := time.ParseDuration(cfg.HealthCheck.Interval)
 	if err != nil {
@@ -67,15 +102,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	checker := health.NewChecker(bal, interval, cfg.HealthCheck.Path, timeout, logger)
+	checker := health.NewChecker(bal, interval, cfg.HealthCheck.Path, timeout, logger, met)
 	checker.Start(ctx)
 
+	// Build handler chain with middleware
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", met.Handler())
-	mux.Handle("/", proxy.NewHandler(bal, met, logger))
+
+	// Metrics endpoint
+	if cfg.Metrics.Enabled {
+		mux.Handle(cfg.Metrics.Path, met.Handler())
+	}
+
+	// Proxy handler with middleware
+	proxyHandler := proxy.NewHandler(bal, met, logger)
+	
+	// Apply middleware chain: Tracing -> RequestID -> Proxy
+	handler := middleware.RequestIDMiddleware(proxyHandler)
+	if cfg.Tracing.Enabled {
+		handler = middleware.TracingMiddleware(cfg.Tracing.Service)(handler)
+	}
+	
+	mux.Handle("/", handler)
 
 	srv := &http.Server{
 		Addr:         cfg.ListenAddr,
@@ -97,10 +144,16 @@ func main() {
 		srv.Shutdown(shutdownCtx)
 	}()
 
+	// Periodically update runtime metrics
+	go updateRuntimeMetrics(ctx, met, 10*time.Second)
+
 	logger.Info("load balancer starting", map[string]interface{}{
-		"addr":     cfg.ListenAddr,
-		"backends": len(cfg.Backends),
-		"strategy": cfg.Strategy,
+		"addr":      cfg.ListenAddr,
+		"backends":  len(cfg.Backends),
+		"strategy":  cfg.Strategy,
+		"metrics":   cfg.Metrics.Enabled,
+		"tracing":   cfg.Tracing.Enabled,
+		"version":   "1.0.0",
 	})
 
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
@@ -124,5 +177,22 @@ func createStrategy(name string) (balancer.Strategy, error) {
 		return strategy.NewRandomTwoChoices(), nil
 	default:
 		return nil, fmt.Errorf("unknown strategy: %s", name)
+	}
+}
+
+// updateRuntimeMetrics periodicallyically updates Prometheus metrics with Go runtime stats.
+func updateRuntimeMetrics(ctx context.Context, met *metrics.Metrics, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+			met.UpdateGoroutines(runtime.NumGoroutine())
+		}
 	}
 }

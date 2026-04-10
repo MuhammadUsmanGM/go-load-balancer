@@ -10,11 +10,12 @@ import (
 	"github.com/go-load-balancer/metrics"
 )
 
-// statusWriter wraps ResponseWriter to capture the status code.
+// statusWriter wraps ResponseWriter to capture the status code and size.
 type statusWriter struct {
 	http.ResponseWriter
 	code    int
 	written bool
+	size    int
 }
 
 func (sw *statusWriter) WriteHeader(code int) {
@@ -30,7 +31,9 @@ func (sw *statusWriter) Write(b []byte) (int, error) {
 		sw.code = http.StatusOK
 		sw.written = true
 	}
-	return sw.ResponseWriter.Write(b)
+	n, err := sw.ResponseWriter.Write(b)
+	sw.size += n
+	return n, err
 }
 
 // NewHandler returns an HTTP handler that proxies requests through the balancer.
@@ -47,17 +50,21 @@ func NewHandler(b *balancer.Balancer, m *metrics.Metrics, l *logging.Logger) htt
 		backend, err := b.Next(r)
 		if err != nil {
 			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
-			l.Error("no healthy backends", map[string]interface{}{
+			l.WithRequestID(r.Context(), "error", "no healthy backends", map[string]interface{}{
 				"method": r.Method,
 				"path":   r.URL.Path,
 			})
-			m.Record("none", http.StatusServiceUnavailable)
+			m.Record("none", "503", r.Method, 0, 0)
 			return
 		}
 
 		backendURL := backend.URL.String()
 		backend.IncrementConnections()
-		defer backend.DecrementConnections()
+		defer func() {
+			backend.DecrementConnections()
+			// Update active connections metric
+			m.SetActiveConnections(backendURL, backend.ActiveConnections())
+		}()
 
 		proxy := &httputil.ReverseProxy{
 			Director: func(req *http.Request) {
@@ -67,7 +74,7 @@ func NewHandler(b *balancer.Balancer, m *metrics.Metrics, l *logging.Logger) htt
 			},
 			Transport: transport,
 			ErrorHandler: func(rw http.ResponseWriter, req *http.Request, e error) {
-				l.Error("proxy error", map[string]interface{}{
+				l.WithRequestID(r.Context(), "error", "proxy error", map[string]interface{}{
 					"backend": backendURL,
 					"error":   e.Error(),
 				})
@@ -80,13 +87,14 @@ func NewHandler(b *balancer.Balancer, m *metrics.Metrics, l *logging.Logger) htt
 		proxy.ServeHTTP(sw, r)
 
 		duration := time.Since(start)
-		m.Record(backendURL, sw.code)
-		l.Info("request completed", map[string]interface{}{
+		m.Record(backendURL, http.StatusText(sw.code), r.Method, duration.Seconds(), int64(sw.size))
+		l.WithRequestID(r.Context(), "info", "request completed", map[string]interface{}{
 			"method":   r.Method,
 			"path":     r.URL.Path,
 			"backend":  backendURL,
 			"status":   sw.code,
 			"duration": duration.String(),
+			"bytes":    sw.size,
 		})
 	}
 }
