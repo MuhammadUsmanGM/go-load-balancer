@@ -2,12 +2,14 @@ package strategy
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/go-load-balancer/balancer"
 )
 
 // RoundRobin implements round-robin load balancing.
 type RoundRobin struct {
+	mu      sync.Mutex
 	current uint64
 }
 
@@ -18,6 +20,9 @@ func NewRoundRobin() *RoundRobin {
 
 // Select returns the next healthy backend using round-robin.
 func (rr *RoundRobin) Select(backends []*balancer.Backend, r *http.Request) (*balancer.Backend, error) {
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+
 	n := uint64(len(backends))
 	for i := uint64(0); i < n; i++ {
 		idx := rr.current % n

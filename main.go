@@ -68,8 +68,9 @@ func main() {
 	backends := make([]balancer.BackendWithWeight, len(cfg.Backends))
 	for i, b := range cfg.Backends {
 		backends[i] = balancer.BackendWithWeight{
-			URL:    b.URL,
-			Weight: b.Weight,
+			URL:        b.URL,
+			Weight:     b.Weight,
+			HealthPath: b.HealthPath,
 		}
 	}
 
@@ -316,7 +317,8 @@ func updateRuntimeMetrics(ctx context.Context, met *metrics.Metrics, interval ti
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runtime.ReadMemStats(nil)
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
 			met.UpdateGoroutines(runtime.NumGoroutine())
 		}
 	}

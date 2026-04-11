@@ -14,9 +14,10 @@ var ErrNoHealthyBackends = errors.New("no healthy backends available")
 
 // Backend represents a single backend server.
 type Backend struct {
-	URL     *url.URL
-	healthy atomic.Bool
-	weight  int
+	URL       *url.URL
+	HealthPath string // Per-backend health check endpoint
+	healthy   atomic.Bool
+	weight    int
 
 	// Active connections tracking for least-connections strategy.
 	activeConns atomic.Uint64
@@ -161,8 +162,9 @@ type Balancer struct {
 
 // BackendWithWeight represents a backend URL with its weight.
 type BackendWithWeight struct {
-	URL    string
-	Weight int
+	URL        string
+	Weight     int
+	HealthPath string // Custom health check path
 }
 
 // NewBalancer creates a balancer from backend URLs with weights and a strategy.
@@ -178,8 +180,9 @@ func NewBalancer(backends []BackendWithWeight, strat Strategy) (*Balancer, error
 			return nil, err
 		}
 		be := &Backend{
-			URL:    u,
-			weight: bw.Weight,
+			URL:        u,
+			HealthPath: bw.HealthPath,
+			weight:     bw.Weight,
 		}
 		if bw.Weight == 0 {
 			be.weight = 1 // Default weight
@@ -237,6 +240,9 @@ func (b *Balancer) GetBackends() []*Backend {
 
 // SetAlive updates the health status of the backend matching the given URL.
 func (b *Balancer) SetAlive(rawURL string, alive bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	
 	for _, be := range b.backends {
 		if be.URL.String() == rawURL {
 			be.SetHealthy(alive)

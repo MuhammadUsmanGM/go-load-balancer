@@ -115,24 +115,3 @@ func (sw *statusWriter) Write(b []byte) (int, error) {
 	}
 	return sw.ResponseWriter.Write(b)
 }
-
-// ProxyTracingMiddleware creates spans for proxied requests to backends.
-func ProxyTracingMiddleware(backendURL string) func(http.Handler) http.Handler {
-	tracer := otel.Tracer("proxy")
-
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx, span := tracer.Start(r.Context(), "proxy.request",
-				trace.WithSpanKind(trace.SpanKindClient),
-				trace.WithAttributes(
-					semconv.HTTPURL(backendURL+r.URL.Path),
-					semconv.HTTPMethod(r.Method),
-					semconv.NetPeerName(backendURL),
-				),
-			)
-			defer span.End()
-
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
-}

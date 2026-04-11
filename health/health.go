@@ -75,12 +75,11 @@ func (c *Checker) Start(ctx context.Context) {
 // checkAll performs health checks on all backends.
 func (c *Checker) checkAll() {
 	for _, backend := range c.balancer.GetBackends() {
-		// Use per-backend health path if available from config
-		// For now, we use the default path (per-backend paths would be stored in Backend struct)
+		// Use per-backend health path if configured, otherwise use default
 		healthPath := c.defaultPath
-		
-		// TODO: In future, store per-backend health path in Backend struct
-		// This would come from config.BackendConfig.HealthPath
+		if backend.HealthPath != "" {
+			healthPath = backend.HealthPath
+		}
 		
 		c.checkBackend(backend, healthPath)
 	}

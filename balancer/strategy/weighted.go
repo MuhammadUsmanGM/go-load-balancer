@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/go-load-balancer/balancer"
 )
@@ -9,6 +10,7 @@ import (
 // WeightedRoundRobin implements weighted round-robin load balancing.
 // Backends with higher weights receive proportionally more requests.
 type WeightedRoundRobin struct {
+	mu              sync.Mutex
 	currentWeight int
 	currentIndex  int
 }
@@ -21,6 +23,9 @@ func NewWeightedRoundRobin() *WeightedRoundRobin {
 // Select returns the next healthy backend using weighted round-robin.
 // Uses the smooth weighted round-robin algorithm.
 func (wrr *WeightedRoundRobin) Select(backends []*balancer.Backend, r *http.Request) (*balancer.Backend, error) {
+	wrr.mu.Lock()
+	defer wrr.mu.Unlock()
+
 	if len(backends) == 0 {
 		return nil, balancer.ErrNoHealthyBackends
 	}

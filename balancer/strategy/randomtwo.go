@@ -3,6 +3,7 @@ package strategy
 import (
 	"math/rand"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-load-balancer/balancer"
@@ -10,6 +11,7 @@ import (
 
 // RandomTwoChoices picks two random backends and selects the one with fewer connections.
 type RandomTwoChoices struct {
+	mu  sync.Mutex
 	rng *rand.Rand
 }
 
@@ -34,6 +36,9 @@ func (rtc *RandomTwoChoices) Select(backends []*balancer.Backend, r *http.Reques
 		}
 		return nil, balancer.ErrNoHealthyBackends
 	}
+
+	rtc.mu.Lock()
+	defer rtc.mu.Unlock()
 
 	// Pick two random backends
 	var best *balancer.Backend

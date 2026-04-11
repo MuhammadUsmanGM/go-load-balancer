@@ -1,7 +1,7 @@
 package proxy
 
 import (
-	"context"
+	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"time"
@@ -193,7 +193,8 @@ func NewHandler(b *balancer.Balancer, m *metrics.Metrics, l *logging.Logger, cfg
 
 		// Record metrics
 		duration := time.Since(start)
-		m.Record(backendURL, http.StatusText(sw.code), r.Method, duration.Seconds(), int64(sw.size))
+		statusCode := fmt.Sprintf("%d", sw.code)
+		m.Record(backendURL, statusCode, r.Method, duration.Seconds(), int64(sw.size))
 		l.WithRequestID(r.Context(), "info", "request completed", map[string]interface{}{
 			"method":   r.Method,
 			"path":     r.URL.Path,
@@ -212,9 +213,4 @@ func InitCircuitBreakers(backends []string, threshold int64, timeout time.Durati
 		breakers[url] = circuitbreaker.New(threshold, timeout)
 	}
 	return breakers
-}
-
-// UpdateContext adds retry and circuit breaker info to context.
-func UpdateContext(ctx context.Context, key string, value interface{}) context.Context {
-	return context.WithValue(ctx, key, value)
 }
